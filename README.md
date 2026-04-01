@@ -38,17 +38,6 @@ That's where this app comes in. It lets you transform Instagram into a focused m
 3. Use Android Studio to build and run on your device or emulator
 4. Follow Android's standard app installation process
 
-### For Developers (Building from Source - iOS)
-
-1. Clone or download this repository
-2. Build for iOS:
-   ```bash
-   ionic build
-   npx cap sync ios
-   npx cap open ios
-   ```
-3. Use Xcode to build and run on your device or emulator
-
 ## 🚀 Usage
 
 1. Open the Instagram Messages Focus App
@@ -99,13 +88,13 @@ www/              # Built web assets
    ionic build --prod
    ```
 
-## 📝 License
-
-This project is open source and available under the MIT License.
-
 ## ⚠️ Disclaimer
 
 This is a personal project and not affiliated with Meta/Facebook/Instagram. Use responsibly and be aware that website updates from Meta may affect the extension's functionality.
+
+## 📝 License
+
+This project is open source and available under the MIT License.
 
 ---
 
