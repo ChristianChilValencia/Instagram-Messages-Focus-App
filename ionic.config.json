@@ -1,0 +1,7 @@
+{
+  "name": "Instagram-Messages-Focus-App",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "angular-standalone"
+}
