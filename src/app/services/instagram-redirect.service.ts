@@ -10,64 +10,88 @@ export class InstagramRedirectService {
   private currentPath: string = '/direct/';
   private readonly PREF_KEY = 'instagram_last_route';
   private readonly INSTAGRAM_BASE = 'https://www.instagram.com';
-
-  // Allowed routes
-  private readonly ALLOWED_ROUTES = ['/direct/', '/p/', '/settings/', '/accounts/login/'];
+  private listenersBound = false;
+  private browserOpen = false;
+  private opening = false;
+  private redirecting = false;
+  private intentionalClose = false;
 
   constructor(private platform: Platform) {}
 
-  /**
-   * Open Instagram in InAppBrowser with route monitoring
-   */
   async openInstagram(): Promise<void> {
     try {
-      // Restore last visited route
-      const lastRoute = await this.getLastRoute();
-      const startUrl = `${this.INSTAGRAM_BASE}${lastRoute}`;
+      const startPath = await this.getStartPath();
+      this.currentPath = startPath;
 
-      // Check platform to determine loading method
       if (this.platform.is('capacitor')) {
-        await this.openWithInAppBrowser(startUrl);
+        await this.ensureListeners();
+        await this.openAtPath(startPath);
       } else {
-        // Web fallback
-        this.openWithWindowOpen(startUrl);
+        this.openWithWindowOpen(`${this.INSTAGRAM_BASE}${startPath}`);
       }
     } catch (error) {
-      console.error('Error opening Instagram:', error);
+      console.error('[Instagram] openInstagram error:', error);
     }
   }
 
-  /**
-   * Open Instagram using native InAppBrowser plugin
-   */
-  private async openWithInAppBrowser(startUrl: string): Promise<void> {
+  // Called by HomePage when app regains focus so the blank page never stays visible.
+  async ensureBrowserOpen(): Promise<void> {
+    if (!this.platform.is('capacitor')) {
+      return;
+    }
+
+    if (this.browserOpen || this.opening || this.redirecting) {
+      return;
+    }
+
+    await this.ensureListeners();
+    await this.openAtPath(this.currentPath);
+  }
+
+  private async getStartPath(): Promise<string> {
+    // Always start at /direct/. If user is not logged in, Instagram sends them to /accounts/login/.
+    return '/direct/';
+  }
+
+  private async ensureListeners(): Promise<void> {
+    if (this.listenersBound) {
+      return;
+    }
+
+    await InAppBrowser.addListener('browserPageNavigationCompleted', async (data: any) => {
+      const fullUrl = data?.url || '';
+      await this.handleNavigation(fullUrl);
+    });
+
+    await InAppBrowser.addListener('browserPageLoaded', async () => {
+      this.browserOpen = true;
+      console.log('[Instagram] page loaded');
+    });
+
+    await InAppBrowser.addListener('browserClosed', async () => {
+      this.browserOpen = false;
+      console.log('[Instagram] browser closed');
+
+      if (this.intentionalClose) {
+        this.intentionalClose = false;
+        return;
+      }
+
+      // If Android back closes InAppBrowser, immediately reopen to avoid blank app page.
+      await this.ensureBrowserOpen();
+    });
+
+    this.listenersBound = true;
+  }
+
+  private async openAtPath(path: string): Promise<void> {
+    const normalized = this.normalizePathForOpen(path);
+    const url = `${this.INSTAGRAM_BASE}${normalized}`;
+
+    this.opening = true;
     try {
-      // Set up event listeners before opening
-      const navigationListener = await InAppBrowser.addListener(
-        'browserPageNavigationCompleted',
-        (data: any) => {
-          this.handleNavigationEvent(data.url);
-        }
-      );
-
-      const loadedListener = await InAppBrowser.addListener('browserPageLoaded', async () => {
-        if (this.currentPath) {
-          await this.persistRoute(this.currentPath);
-        }
-      });
-
-      const closedListener = await InAppBrowser.addListener('browserClosed', async () => {
-        // Browser closed, persist final route
-        await this.persistRoute(this.currentPath);
-        // Clean up listeners
-        navigationListener.remove();
-        loadedListener.remove();
-        closedListener.remove();
-      });
-
-      // Open in web view
       await InAppBrowser.openInWebView({
-        url: startUrl,
+        url,
         options: {
           showURL: false,
           showToolbar: false,
@@ -75,7 +99,7 @@ export class InstagramRedirectService {
           clearSessionCache: false,
           mediaPlaybackRequiresUserAction: false,
           closeButtonText: 'Close',
-          toolbarPosition: 0, // TOP
+          toolbarPosition: 0,
           showNavigationButtons: false,
           leftToRight: false,
           android: {
@@ -88,176 +112,162 @@ export class InstagramRedirectService {
             enableViewportScale: false,
             allowInLineMediaPlayback: false,
             surpressIncrementalRendering: false,
-            viewStyle: 2, // FULL_SCREEN
-            animationEffect: 1, // CROSS_DISSOLVE
+            viewStyle: 2,
+            animationEffect: 1,
             allowsBackForwardNavigationGestures: false,
           },
         },
       });
+
+      this.browserOpen = true;
+      this.currentPath = normalized;
+      await this.persistRoute(normalized);
+      console.log('[Instagram] opened:', normalized);
+    } finally {
+      this.opening = false;
+    }
+  }
+
+  private async handleNavigation(fullUrl: string): Promise<void> {
+    const parsed = this.parseUrl(fullUrl);
+    if (!parsed) {
+      await this.redirectTo(this.getRedirectTarget(this.currentPath));
+      return;
+    }
+
+    const { host, path } = parsed;
+    const cleanPathForCheck = this.normalizePathForCheck(path);
+
+    const hostAllowed = host === 'www.instagram.com' || host === 'instagram.com';
+    const pathAllowed = this.isAllowedRoute(cleanPathForCheck);
+
+    if (hostAllowed && pathAllowed) {
+      const routeToStore = this.normalizePathForOpen(cleanPathForCheck);
+      this.currentPath = routeToStore;
+      await this.persistRoute(routeToStore);
+      return;
+    }
+
+    const target = this.getRedirectTarget(this.currentPath);
+    await this.redirectTo(target);
+  }
+
+  private async redirectTo(path: string): Promise<void> {
+    if (this.redirecting) {
+      return;
+    }
+
+    this.redirecting = true;
+    try {
+      const target = this.normalizePathForOpen(path);
+      this.currentPath = target;
+      await this.persistRoute(target);
+
+      this.intentionalClose = true;
+      await InAppBrowser.close();
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      await this.openAtPath(target);
+
+      console.log('[Instagram] redirected to:', target);
     } catch (error) {
-      console.error('Error opening InAppBrowser:', error);
+      console.error('[Instagram] redirect error:', error);
+    } finally {
+      this.redirecting = false;
     }
   }
 
   /**
-   * Web fallback: open Instagram in a new window
+   * Web fallback
    */
   private openWithWindowOpen(startUrl: string): void {
-    // For web testing, open in same tab since we can't monitor cross-origin navigation
     window.location.href = startUrl;
   }
 
-  /**
-   * Handle URL navigation - validate and redirect if blocked
-   */
-  private async handleNavigationEvent(url: string): Promise<void> {
-    const path = this.extractPath(url);
-
-    if (!this.isAllowedRoute(path)) {
-      const redirectTarget = this.getRedirectTarget(this.currentPath);
-      const redirectUrl = `${this.INSTAGRAM_BASE}${redirectTarget}`;
-
-      try {
-        // Close current browser and reopen with redirect URL
-        await InAppBrowser.close();
-        await new Promise((resolve) => setTimeout(resolve, 500)); // Small delay
-        await this.openInstagram(); // This will load the last saved route
-      } catch (error) {
-        console.error('Error redirecting:', error);
-      }
-    } else {
-      // Valid route, update current path
-      this.currentPath = path;
-      await this.persistRoute(path);
+  private parseUrl(fullUrl: string): { host: string; path: string } | null {
+    try {
+      const url = new URL(fullUrl);
+      return { host: url.hostname.toLowerCase(), path: url.pathname || '/' };
+    } catch {
+      return null;
     }
   }
 
-  /**
-   * Validate if route is allowed
-   */
   private isAllowedRoute(path: string): boolean {
-    const lowerPath = path.toLowerCase();
-
-    // Check for /accounts/login/ first
-    if (
-      lowerPath === '/accounts/login/' ||
-      lowerPath.startsWith('/accounts/login/?') ||
-      lowerPath.startsWith('/accounts/login/#')
-    ) {
-      return true;
-    }
-
-    // Check for /direct/
-    if (
-      lowerPath === '/direct/' ||
-      lowerPath.startsWith('/direct/?') ||
-      lowerPath.startsWith('/direct/#')
-    ) {
-      return true;
-    }
-
-    // Check for /p/ (with anything after)
-    if (lowerPath.startsWith('/p/')) {
-      return true;
-    }
-
-    // Check for /settings/
-    if (
-      lowerPath === '/settings/' ||
-      lowerPath.startsWith('/settings/?') ||
-      lowerPath.startsWith('/settings/#')
-    ) {
-      return true;
-    }
-
+    const lower = path.toLowerCase();
+    if (lower === '/accounts/login/' || lower.startsWith('/accounts/login/')) return true;
+    if (lower === '/accounts/settings/' || lower.startsWith('/accounts/settings/')) return true;
+    if (lower === '/direct/' || lower.startsWith('/direct/')) return true;
+    if (lower.startsWith('/p/')) return true;
     return false;
   }
 
-  /**
-   * Get intelligent redirect target based on current page
-   */
   private getRedirectTarget(currentPath: string): string {
-    const path = currentPath.toLowerCase();
-
-    // If on /direct/, redirect blocked routes to /settings/
-    if (path.startsWith('/direct/')) {
-      return '/settings/';
-    }
-
-    // If on /settings/, redirect blocked routes to /direct/
-    if (path.startsWith('/settings/')) {
-      return '/direct/';
-    }
-
-    // If on /p/something, redirect blocked routes to /direct/
-    if (path.startsWith('/p/')) {
-      return '/direct/';
-    }
-
-    // If on login page, redirect to /direct/ after login
-    if (path.startsWith('/accounts/login/')) {
-      return '/direct/';
-    }
-
-    // Default fallback
+    const p = currentPath.toLowerCase();
+    if (p.startsWith('/direct/')) return '/accounts/settings/';
+    if (p.startsWith('/accounts/settings/')) return '/direct/';
     return '/direct/';
   }
 
-  /**
-   * Extract pathname from URL
-   */
-  private extractPath(fullUrl: string): string {
-    try {
-      const url = new URL(fullUrl);
-      return url.pathname;
-    } catch {
-      return '/direct/'; // Fallback to /direct/ if URL parsing fails
+  private normalizePathForCheck(path: string): string {
+    let out = (path || '/').trim();
+    if (!out.startsWith('/')) {
+      out = `/${out}`;
     }
+
+    // Strip query/hash if they appear in a raw string input.
+    out = out.split('?')[0].split('#')[0];
+
+    // Keep root as root so it remains BLOCKED.
+    if (out === '' || out === '/') {
+      return '/';
+    }
+
+    return out;
+  }
+
+  private normalizePathForOpen(path: string): string {
+    const checked = this.normalizePathForCheck(path);
+
+    if (checked === '/') return '/direct/';
+
+    let out = checked;
+
+    if (out === '/direct') return '/direct/';
+    if (out === '/accounts/settings') return '/accounts/settings/';
+    if (out === '/accounts/login') return '/accounts/login/';
+    if (out === '/p') return '/p/';
+
+    // Ensure trailing slash for stable matching on top-level sections.
+    if (out === '/direct' || out === '/direct/') return '/direct/';
+    if (out === '/accounts/login' || out === '/accounts/login/') return '/accounts/login/';
+    if (out === '/accounts/settings' || out === '/accounts/settings/') return '/accounts/settings/';
+
+    return out;
   }
 
   /**
-   * Save current route to device storage
+   * Save route to storage
    */
   private async persistRoute(path: string): Promise<void> {
     try {
+      const finalPath = this.normalizePathForOpen(path);
       await Preferences.set({
         key: this.PREF_KEY,
-        value: path || '/direct/',
+        value: finalPath,
       });
     } catch (error) {
-      console.error('Error persisting route:', error);
+      console.error('[Instagram] Save error:', error);
     }
   }
 
   /**
-   * Restore last visited route from storage
-   */
-  private async getLastRoute(): Promise<string> {
-    try {
-      const result = await Preferences.get({ key: this.PREF_KEY });
-      const route = result.value;
-
-      // Validate stored route is still allowed
-      if (route && this.isAllowedRoute(route)) {
-        return route;
-      }
-
-      return '/direct/'; // Default if no valid stored route
-    } catch (error) {
-      console.error('Error retrieving last route:', error);
-      return '/direct/'; // Default on error
-    }
-  }
-
-  /**
-   * Close the browser (cleanup)
+   * Close browser
    */
   async closeBrowser(): Promise<void> {
     try {
       await InAppBrowser.close();
     } catch (error) {
-      console.error('Error closing browser:', error);
+      console.error('[Instagram] Close error:', error);
     }
   }
 }
-

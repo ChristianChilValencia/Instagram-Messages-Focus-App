@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'io.ionic.starter',
-  appName: 'Instagram-Messages-Focus-App',
+  appName: 'Instagram Messages',
   webDir: 'www'
 };
 
