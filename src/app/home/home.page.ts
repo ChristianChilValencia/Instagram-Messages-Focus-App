@@ -1,12 +1,16 @@
-import { Component } from '@angular/core';
-import { IonHeader, IonToolbar, IonTitle, IonContent } from '@ionic/angular/standalone';
+import { Component, OnInit } from '@angular/core';
+import { InstagramRedirectService } from '../services/instagram-redirect.service';
 
 @Component({
   selector: 'app-home',
   templateUrl: 'home.page.html',
   styleUrls: ['home.page.scss'],
-  imports: [IonHeader, IonToolbar, IonTitle, IonContent],
 })
-export class HomePage {
-  constructor() {}
+export class HomePage implements OnInit {
+  constructor(private instagramService: InstagramRedirectService) {}
+
+  async ngOnInit(): Promise<void> {
+    // Auto-launch Instagram in InAppBrowser
+    await this.instagramService.openInstagram();
+  }
 }
