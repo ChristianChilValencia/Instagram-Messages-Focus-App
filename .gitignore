@@ -65,6 +65,22 @@ yarn-error.log
 testem.log
 /typings
 
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# Android/Security - Signing keys & certificates
+*.jks
+*.keystore
+*.p8
+*.pem
+*.key
+signing-key.json
+
+# Firebase/Google Services
+google-services.json
+
 # System files
 .DS_Store
 Thumbs.db
